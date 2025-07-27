@@ -1,21 +1,9 @@
-import subprocess
-import sys
 import pandas as pd
 from rapidfuzz import fuzz
 from datetime import datetime
 import os
+import platform
 
-# Gerekli paketlerin kurulumunu kontrol et
-def install_if_needed(package):
-    try:
-        __import__(package)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-for pkg in ["lxml", "rapidfuzz", "openpyxl"]:
-    install_if_needed(pkg)
-
-# Eşleştirme fonksiyonu
 def eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=90, dosya_adi_prefix="urun_eslestirme", indirme_modu="yerel"):
     eslesmeler = []
     eslesmeyenler = []
@@ -69,15 +57,22 @@ def eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=90, dosya_adi_p
 
     if indirme_modu == "yerel":
         try:
-            os.startfile(dosya1)
-            os.startfile(dosya2)
-        except:
-            print("💡 Otomatik açma başarısız. Dosyaları elle açabilirsiniz.")
+            if platform.system() == "Windows":
+                os.startfile(dosya1)
+                os.startfile(dosya2)
+            elif platform.system() == "Darwin":  # macOS
+                os.system(f"open {dosya1}")
+                os.system(f"open {dosya2}")
+            else:  # Linux
+                os.system(f"xdg-open {dosya1}")
+                os.system(f"xdg-open {dosya2}")
+        except Exception as e:
+            print(f"⚠️ Otomatik açma başarısız: {e}")
 
     return df_eslesen, df_eslesmeyen
 
 # -----------------------------
-# Buraya örnek veri girilebilir:
+# Test verisiyle çalıştırma:
 # -----------------------------
 if __name__ == "__main__":
     fatura_listesi = [
@@ -90,5 +85,4 @@ if __name__ == "__main__":
         {"urun_kodu": "DEF456", "urun_adi": "Silgi Küçük", "norm_kod": "def456", "norm_ad": "silgi kucuk"}
     ]
 
-    # Fonksiyon çağrısı
     eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=85)
