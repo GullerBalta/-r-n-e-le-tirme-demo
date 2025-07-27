@@ -1,18 +1,26 @@
+import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz
+from io import BytesIO
 from datetime import datetime
-import os
-import platform
 
-def eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=90, dosya_adi_prefix="urun_eslestirme", indirme_modu="yerel"):
+st.set_page_config(page_title="Ürün Eşleştirme", layout="wide")
+st.title("🔍 Ürün Kodu + Adı ile Fatura - Sipariş Eşleştirme")
+
+# Fonksiyon: Normalizasyon
+def normalize(text):
+    return str(text).strip().lower() if pd.notna(text) else ""
+
+# Fonksiyon: Eşleştirme işlemi
+def eslestir(fatura_df, siparis_df, skor_esigi=90):
     eslesmeler = []
     eslesmeyenler = []
 
-    for fatura in fatura_listesi:
+    for _, fatura in fatura_df.iterrows():
         best_score = 0
         best_match = None
 
-        for siparis in siparis_listesi:
+        for _, siparis in siparis_df.iterrows():
             skor_kod = fuzz.token_set_ratio(fatura["norm_kod"], siparis["norm_kod"])
             skor_ad = fuzz.token_set_ratio(fatura["norm_ad"], siparis["norm_ad"])
             toplam_skor = 0.7 * skor_kod + 0.3 * skor_ad
@@ -37,52 +45,62 @@ def eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=90, dosya_adi_p
                 "durum": "EŞLEŞMEDİ"
             })
 
-    df_eslesen = pd.DataFrame(eslesmeler)
-    df_eslesmeyen = pd.DataFrame(eslesmeyenler)
+    return pd.DataFrame(eslesmeler), pd.DataFrame(eslesmeyenler)
 
-    tarih = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dosya1 = f"{dosya_adi_prefix}_eslesen_{tarih}.xlsx"
-    dosya2 = f"{dosya_adi_prefix}_eslesmeyen_{tarih}.xlsx"
+# Excel'e yazmak için yardımcı fonksiyon
+def dataframe_to_excel_bytes(df1, df2):
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df1.to_excel(writer, index=False, sheet_name="Eslesen")
+        df2.to_excel(writer, index=False, sheet_name="Eslesmeyen")
+    buffer.seek(0)
+    return buffer
 
-    df_eslesen.to_excel(dosya1, index=False)
-    df_eslesmeyen.to_excel(dosya2, index=False)
+# Dosya yükleme alanları
+col1, col2 = st.columns(2)
 
-    print("✅ Eşleşen Ürünler:")
-    print(df_eslesen.to_string(index=False))
+with col1:
+    fatura_file = st.file_uploader("📄 Fatura dosyasını yükleyin (.xlsx)", type=["xlsx"])
 
-    print("\n🚫 Eşleşmeyen Ürünler:")
-    print(df_eslesmeyen.to_string(index=False))
+with col2:
+    siparis_file = st.file_uploader("📄 Sipariş dosyasını yükleyin (.xlsx)", type=["xlsx"])
 
-    print(f"\n📁 Excel çıktıları kaydedildi:\n - {dosya1}\n - {dosya2}")
+# Benzerlik eşiği ayarı
+skor_esigi = st.slider("🎯 Benzerlik Eşiği (%)", min_value=50, max_value=100, value=90)
 
-    if indirme_modu == "yerel":
-        try:
-            if platform.system() == "Windows":
-                os.startfile(dosya1)
-                os.startfile(dosya2)
-            elif platform.system() == "Darwin":  # macOS
-                os.system(f"open {dosya1}")
-                os.system(f"open {dosya2}")
-            else:  # Linux
-                os.system(f"xdg-open {dosya1}")
-                os.system(f"xdg-open {dosya2}")
-        except Exception as e:
-            print(f"⚠️ Otomatik açma başarısız: {e}")
+# İşlem
+if fatura_file and siparis_file:
+    try:
+        df_fatura = pd.read_excel(fatura_file)
+        df_siparis = pd.read_excel(siparis_file)
 
-    return df_eslesen, df_eslesmeyen
+        # Normalizasyon
+        df_fatura["norm_kod"] = df_fatura["urun_kodu"].apply(normalize)
+        df_fatura["norm_ad"] = df_fatura["urun_adi"].apply(normalize)
+        df_siparis["norm_kod"] = df_siparis["urun_kodu"].apply(normalize)
+        df_siparis["norm_ad"] = df_siparis["urun_adi"].apply(normalize)
 
-# -----------------------------
-# Test verisiyle çalıştırma:
-# -----------------------------
-if __name__ == "__main__":
-    fatura_listesi = [
-        {"urun_kodu": "ABC123", "urun_adi": "Kalem Kırmızı", "norm_kod": "abc123", "norm_ad": "kalem kirmizi"},
-        {"urun_kodu": "DEF456", "urun_adi": "Silgi Küçük", "norm_kod": "def456", "norm_ad": "silgi kucuk"}
-    ]
+        df_eslesen, df_eslesmeyen = eslestir(df_fatura, df_siparis, skor_esigi)
 
-    siparis_listesi = [
-        {"urun_kodu": "ABC124", "urun_adi": "Kalem Renkli", "norm_kod": "abc124", "norm_ad": "kalem renkli"},
-        {"urun_kodu": "DEF456", "urun_adi": "Silgi Küçük", "norm_kod": "def456", "norm_ad": "silgi kucuk"}
-    ]
+        st.success("✅ Eşleştirme tamamlandı!")
 
-    eslestir_urunler(fatura_listesi, siparis_listesi, skor_esigi=85)
+        st.subheader("🔍 Eşleşen Ürünler")
+        st.dataframe(df_eslesen, use_container_width=True)
+
+        st.subheader("❌ Eşleşmeyen Ürünler")
+        st.dataframe(df_eslesmeyen, use_container_width=True)
+
+        # Excel indirme
+        excel_bytes = dataframe_to_excel_bytes(df_eslesen, df_eslesmeyen)
+        tarih = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            label="📥 Excel çıktısını indir",
+            data=excel_bytes,
+            file_name=f"eslestirme_sonuclari_{tarih}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        st.error(f"Hata oluştu: {e}")
+else:
+    st.info("👆 Eşleştirme işlemi için lütfen iki Excel dosyası yükleyin.")
